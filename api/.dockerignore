@@ -1,0 +1,11 @@
+# Sin este archivo, el "COPY . ." del Dockerfile mete adentro de la imagen el
+# .venv y las cachés que el contenedor escribió en el host a través del bind
+# mount "./api:/app". Eso infla la imagen y hornea un entorno viejo que después
+# queda pisado por el mount igual: basura pura.
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store

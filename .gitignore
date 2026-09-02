@@ -1,0 +1,19 @@
+# Secretos y config local (el ejemplo versionado es .env.example)
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# macOS
+.DS_Store
+
+# Contenido generado del volumen compartido con n8n/api: no versionamos
+# informes ni archivos que dejen los contenedores, pero sí mantenemos la
+# carpeta en git gracias al .gitkeep.
+compartido/*
+!compartido/informes/
+compartido/informes/*
+!compartido/informes/.gitkeep

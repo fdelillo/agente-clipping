@@ -1,0 +1,111 @@
+# Nota: NO ponemos la clave "version:" acá arriba. Era necesaria en Compose v1
+# pero está obsoleta desde Compose v2 (Docker 29 ya trae Compose v5 integrado)
+# y si la dejamos, Docker tira un warning cada vez que corremos un comando.
+
+services:
+  # ── Base de datos ──────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      # Volumen nombrado: los datos sobreviven a "docker compose down" (pero
+      # NO a "down -v", que es justamente lo que usamos para resetear todo).
+      - postgres_data:/var/lib/postgresql/data
+      # Todo .sql que esté acá se ejecuta UNA sola vez, la primera vez que
+      # Postgres arranca con el volumen de datos vacío. Si después cambiás
+      # el esquema, este archivo no se vuelve a correr solo: hay que hacer
+      # "make reset" (borra el volumen) para que se vuelva a aplicar.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      # Exponemos el puerto al host para poder conectar un cliente GUI
+      # (TablePlus, DBeaver, etc.) directo a localhost:5432 además de Adminer.
+      - "5432:5432"
+    healthcheck:
+      # pg_isready confirma que el servidor acepta conexiones para esta DB
+      # puntual, no solo que el proceso esté vivo. La api espera este check
+      # en verde antes de arrancar (ver depends_on más abajo).
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── API de dominio (Python / FastAPI) ──────────────────────────────────
+  api:
+    build: ./api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        # No alcanza con "postgres ya arrancó": esperamos a que el
+        # healthcheck de arriba diga "healthy", si no la api puede fallar
+        # al conectar en el primer segundo de vida del contenedor.
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      # Montamos el código fuente para que uvicorn --reload detecte cambios
+      # sin tener que reconstruir la imagen en cada edición (modo desarrollo).
+      - ./api:/app
+      # Carpeta compartida con n8n: acá la api deja los informes generados
+      # y n8n puede leerlos/servirlos sin pasar por HTTP.
+      - ./compartido:/data
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+    healthcheck:
+      # Pegamos al propio endpoint de salud de la app. Usamos python (que ya
+      # está en la imagen) en vez de curl/wget para no agregar paquetes solo
+      # para esto.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status == 200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # ── Orquestador de workflows ───────────────────────────────────────────
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    volumes:
+      # Volumen nombrado: acá vive la base SQLite de n8n con los workflows,
+      # credenciales y el historial de ejecuciones. No se toca a mano.
+      - n8n_data:/home/node/.n8n
+      # Misma carpeta compartida que monta la api, para leer/escribir
+      # informes y otros archivos intermedios.
+      - ./compartido:/data
+      # Acá exportamos los workflows como JSON versionado (ver Etapa 3).
+      # Sin esto, un "docker compose down -v" te borra los workflows para
+      # siempre porque viven solo en el volumen n8n_data.
+      - ./n8n/workflows:/workflows
+    environment:
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE}
+      TZ: ${GENERIC_TIMEZONE}
+      # OJO: en versiones viejas de n8n hacía falta prender esto a mano
+      # (N8N_RUNNERS_ENABLED=true) o tirar un warning de deprecación. En la
+      # versión "latest" actual (2.37.7) es al revés: los runners ya vienen
+      # activados por defecto, y si seteás esta variable explícitamente es
+      # ESO lo que ahora genera el warning de deprecación ("ya no hace
+      # falta"). Por eso NO la seteamos acá.
+    # OJO ACÁ: dentro de la red que crea Compose, cada servicio se resuelve
+    # por su nombre (DNS interno de Docker). Desde un nodo HTTP Request de
+    # n8n la API se llama http://api:8000 — NUNCA http://localhost:8000,
+    # porque "localhost" adentro del contenedor de n8n apunta al propio n8n,
+    # no al host ni a otro contenedor. Es el error más común al arrancar.
+
+  # ── Cliente web para Postgres ───────────────────────────────────────────
+  adminer:
+    image: adminer:latest
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:
+  n8n_data:
