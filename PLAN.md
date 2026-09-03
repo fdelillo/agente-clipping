@@ -219,7 +219,7 @@ Dos ajustes sobre la spec original de la etapa, ya aplicados:
 - Se agregó `api/.dockerignore` y el `uv.lock` se copia junto al `pyproject.toml` con
   `uv sync --frozen`, para que el build sea reproducible y no hornee el `.venv` del host.
 
-### ✅ Etapa 1 — completa (sin commitear todavía)
+### ✅ Etapa 1 — completa (commit `eddd4d3`)
 Modelos, adapters mock y endpoint de captura. 21 tests en verde.
 
 Archivos: `api/app/models.py`, `api/app/sources/{base,__init__,_fake,mock_x,mock_instagram}.py`,
@@ -254,7 +254,7 @@ GET /sources/{provider}/search?tag=&limit=
     422 -> tag ausente/vacío, limit fuera de [1, 100]
 ```
 
-### ✅ Etapa 2 — completa (sin commitear todavía)
+### ✅ Etapa 2 — completa (commit `a258e89`)
 Análisis con LLM. 39 tests en verde. **No probada en vivo todavía: falta `GROQ_API_KEY`.**
 
 Archivos: `api/app/llm/{models,prompts,client,service}.py`, `api/app/routers/analyze.py`,
@@ -314,10 +314,45 @@ correcto). Se saca gratis y sin tarjeta en console.groq.com. Después de cargarl
   `limit`, y a veces cero.
 
 ### Cómo retomar
+
+**Estado del repo:** todo commiteado y pusheado a `https://github.com/fdelillo/agente-clipping`.
+`main` trackea `origin/main`, working tree limpio, 39 tests en verde. La autenticación con
+GitHub es vía `gh` CLI (ya instalado y logueado como `fdelillo`), protocolo HTTPS.
+
+**Pasos:**
 1. Abrir Docker Desktop y levantar el stack: `make up`.
 2. Verificar: `make ps` (postgres y api en `healthy`) y `curl localhost:8000/health`.
 3. Probar la captura: `curl "localhost:8000/sources/mock_x/search?tag=milei&limit=3"`.
-4. Decirle a Claude: *"seguimos con la Etapa 2"*.
+   Los `external_id` tienen que ser `599518440855865178`, `227823812536014777`,
+   `720079261720601226` — son deterministas, si cambiaron algo se rompió.
+4. Decirle a Claude: *"seguimos con la Etapa 3"*.
+
+**Dos decisiones quedaron abiertas al cortar la sesión:**
+
+1. **Cómo construir el workflow de n8n.** Es la etapa central del objetivo de aprendizaje, y hay
+   tres formas de encararla, con distinto balance entre velocidad y cuánto se aprende:
+   - Construirlo juntos en la UI de n8n (`localhost:5678`), nodo por nodo, verificando con datos
+     reales en cada paso. Es lo más lento y lo que más enseña. *Recomendado.*
+   - Que Claude genere el JSON completo y se importe de una, y después recorrer qué hace cada
+     nodo. Rápido, pero se aprende leyendo en vez de haciendo.
+   - Híbrido: armar a mano el Schedule Trigger, el HTTP Request y el nodo Postgres (para agarrar
+     la UI y las credenciales) y recibir hecho lo tedioso (IF, Merge y el mapeo del INSERT).
+
+2. **La `GROQ_API_KEY` todavía no está cargada.** Confirmado: `POST /analyze` devuelve 503 con el
+   mensaje correcto. La Etapa 3 se puede construir igual —el nodo de `/analyze` va a fallar, lo
+   que de paso es una buena excusa para configurar el error workflow, que es parte de la etapa—
+   pero para ver análisis reales hace falta la key.
+
+**Qué es la `GROQ_API_KEY`** (quedó explicado en la sesión, se resume acá para no perderlo):
+Groq es un proveedor que corre modelos open source (acá, Llama 3.3 de Meta) en su hardware y los
+expone por HTTP. La API key es la credencial que identifica la cuenta en cada llamada — el mismo
+concepto que la contraseña de Postgres que ya está en el `.env`. Se saca gratis y sin tarjeta en
+console.groq.com → *API Keys* → *Create API Key*; se muestra una sola vez, así que hay que
+copiarla en el momento (si se pierde, se genera otra). Va en el `.env`, en la línea
+`GROQ_API_KEY=` que ya está esperándola, y después alcanza con `docker compose restart api` —no
+hace falta rebuild, porque solo cambia el `.env`. El free tier limita *requests por minuto*, no
+volumen total, y por eso la Etapa 2 manda 20 copies juntos en una sola llamada y reintenta con
+espera ante un 429.
 
 **Recordatorio para cuando toquemos el esquema:** `db/init/001_schema.sql` solo se ejecuta con
 el volumen de Postgres vacío. Si cambia el esquema, hace falta `make reset` (borra los datos) o
