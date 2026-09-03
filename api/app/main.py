@@ -1,11 +1,12 @@
-"""API de dominio del proyecto de social listening (Fase 1, Etapa 1).
+"""API de dominio del proyecto de social listening (Fase 1, Etapa 2).
 
 La Etapa 0 dejó el andamiaje: la app arranca, se conecta a Postgres y
-expone /health. Esta etapa suma el primer negocio real: los adapters de
-fuentes (mock_x, mock_instagram) detrás de /sources, que capturan y
-normalizan menciones al esquema común `Mention` (ver app/models.py y
-app/sources/). El análisis con LLM (/analyze) y el informe llegan recién en
-las Etapas 2 y 4.
+expone /health. La Etapa 1 sumó los adapters de fuentes (mock_x,
+mock_instagram) detrás de /sources, que capturan y normalizan menciones al
+esquema común `Mention` (ver app/models.py y app/sources/). Esta etapa suma
+el análisis con LLM: POST /analyze le pega a Groq para clasificar
+sentimiento y temas de un batch de copies (ver app/llm/). El informe
+(Etapa 4) todavía no existe.
 """
 
 from contextlib import asynccontextmanager
@@ -14,7 +15,7 @@ from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 
 from app.db import check_db, pool
-from app.routers import sources
+from app.routers import analyze, sources
 
 
 @asynccontextmanager
@@ -29,11 +30,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="social-listening-api", lifespan=lifespan)
 app.include_router(sources.router)
+app.include_router(analyze.router)
 
 
 @app.get("/")
 async def root() -> dict:
-    return {"service": "social-listening-api", "etapa": 1}
+    return {"service": "social-listening-api", "etapa": 2}
 
 
 @app.get("/health")

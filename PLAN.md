@@ -254,13 +254,58 @@ GET /sources/{provider}/search?tag=&limit=
     422 -> tag ausente/vacío, limit fuera de [1, 100]
 ```
 
-### ⏭️ Etapa 2 — siguiente
-Análisis con LLM (ver §5): cliente de Groq con `llama-3.3-70b-versatile`, prompt de análisis
-sobre el copy, salida JSON estructurada validada con Pydantic, batching con reintentos,
-`POST /analyze` y tests con la respuesta del LLM mockeada.
+### ✅ Etapa 2 — completa (sin commitear todavía)
+Análisis con LLM. 39 tests en verde. **No probada en vivo todavía: falta `GROQ_API_KEY`.**
 
-**Requisito para arrancar:** `GROQ_API_KEY` cargada en `.env` (la key se saca gratis en
-console.groq.com). Los tests no la necesitan, porque mockean la respuesta del modelo.
+Archivos: `api/app/llm/{models,prompts,client,service}.py`, `api/app/routers/analyze.py`,
+settings nuevos en `api/app/config.py`, y los tests `api/tests/test_llm_{client,service,prompts}.py`
+y `test_analyze_router.py`.
+
+Decisiones de la etapa:
+
+- **`POST /analyze` no toca Postgres.** Recibe `[{external_id, copy_text}]` y devuelve
+  `[{external_id, analyzed, sentiment, ...}]`. Es n8n quien hace el **merge** entre la mención
+  capturada y su análisis antes del INSERT. Los nombres de campo de `Analysis` coinciden 1 a 1
+  con las columnas de `mentions`, para que el nodo Postgres mapee directo sin un Set intermedio.
+- **Batching** de `llm_batch_size` (20) copies por llamada: el rate limit de Groq es por minuto.
+- **La re-asociación va por índice explícito, nunca por orden de la lista.** Es el punto más
+  delicado de la etapa: si el modelo alucina o se saltea un índice y uno confía en el orden, el
+  análisis se pega a la mención equivocada sin que nada falle visiblemente. Se descartan los
+  índices fuera de rango y los repetidos.
+- **La validación es item por item, no por lote.** Un `sentiment_score` alucinado descarta ese
+  item y los demás pasan. Solo se reintenta si no validó ninguno. (Corregido en revisión: la
+  primera versión validaba el lote entero y un item malo tiraba 19 buenos.)
+- **Reintentos solo ante lo que un reintento arregla:** red, 5xx, 429 y respuesta inservible.
+  Un 401 o un 400 no se reintentan. El backoff no duerme después del último intento.
+- **El prompt serializa los copies con `json.dumps`**, no como líneas `"{i}: {texto}"`: los copies
+  son texto de terceros multilínea y el formato de líneas permitía inyectar entradas falsas.
+  El system prompt además advierte al modelo que los copies son contenido a analizar, no órdenes.
+- **Degradación explícita:** un item que falla vuelve con `analyzed=False`, `error` con el motivo
+  y `analyzed_at` en `None` — que es lo que después deja la fila con `analyzed_at IS NULL` en
+  Postgres, elegible para un barrido posterior vía `idx_mentions_analyzed_at`.
+- **503 vs 200 parcial:** falta de `GROQ_API_KEY` es 503 (problema de configuración); un lote que
+  falla es 200 con `failed_count > 0` (información, no error del request).
+
+Contrato que queda publicado para n8n:
+
+```
+POST /analyze
+  body -> {items: [{external_id, copy_text}]}   (1 a 100 items)
+  200  -> {count, analyzed_count, failed_count, results: [Analysis]}
+  422  -> items vacío o fuera del rango [1, 100]
+  503  -> GROQ_API_KEY no configurada
+```
+
+### ⏭️ Etapa 3 — siguiente
+El workflow de n8n (ver §3 y §5). Es la etapa central del objetivo de aprendizaje: Schedule
+Trigger, HTTP Request, nodo Postgres, IF/Filter, Merge, credenciales y error workflow. **Exportar
+el workflow a `n8n/workflows/*.json` y versionarlo** — si vive solo en el volumen de n8n, un
+`make reset` te lo borra.
+
+### Pendiente antes de probar en vivo
+`GROQ_API_KEY` no está cargada en `.env` (confirmado: `POST /analyze` devuelve 503 con el mensaje
+correcto). Se saca gratis y sin tarjeta en console.groq.com. Después de cargarla alcanza con
+`docker compose restart api` — no hace falta rebuild, porque solo cambia el `.env`.
 
 ### Deuda anotada (no bloquea, pero no la perdamos)
 - En Instagram `metrics.views` es `None` cuando el post no es video; en X siempre trae número.
