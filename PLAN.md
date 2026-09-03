@@ -206,12 +206,12 @@ en vez de aceptarse a ciegas.
 
 ## 9. Estado actual
 
-**Última actualización: 2026-09-02.**
+**Última actualización: 2026-09-03.**
 
 ### ✅ Etapa 0 — completa (commit `03985a2`)
 Los cuatro servicios levantan con `make up`. `/health` responde `{"status":"ok","db":"ok"}`,
 la tabla `mentions` existe con el esquema de §4, los tests pasan y desde el contenedor de n8n
-se alcanza `http://api:8000`. Repo git en `main` con el commit inicial, **sin remote**.
+se alcanza `http://api:8000`.
 
 Dos ajustes sobre la spec original de la etapa, ya aplicados:
 - No se setea `N8N_RUNNERS_ENABLED`: en n8n 2.37.7 los runners ya vienen activados y setear
@@ -219,16 +219,66 @@ Dos ajustes sobre la spec original de la etapa, ya aplicados:
 - Se agregó `api/.dockerignore` y el `uv.lock` se copia junto al `pyproject.toml` con
   `uv sync --frozen`, para que el build sea reproducible y no hornee el `.venv` del host.
 
-### ⏭️ Etapa 1 — siguiente
-Modelo de datos y adapters (ver §5): modelos Pydantic `RawXPost` / `RawInstagramPost` /
-`Mention`, proveedor `mock` que genera payloads con la forma cruda real de cada red,
-normalización al esquema común, `GET /sources/{provider}/search` y tests.
+### ✅ Etapa 1 — completa (sin commitear todavía)
+Modelos, adapters mock y endpoint de captura. 21 tests en verde.
+
+Archivos: `api/app/models.py`, `api/app/sources/{base,__init__,_fake,mock_x,mock_instagram}.py`,
+`api/app/routers/sources.py`, y los tests `api/tests/test_{mock_x,mock_instagram,sources_router}.py`.
+
+Decisiones tomadas durante la etapa, que no estaban en la spec original:
+
+- **`Mention` no incluye los campos del LLM.** Representa "lo que devuelve una fuente" en el
+  momento de la captura. El análisis de la Etapa 2 es un objeto aparte y **es n8n quien hace el
+  merge** entre la mención y su análisis antes de insertar. Alternativa descartada: que la API
+  devolviera la mención ya analizada, lo que dejaría a n8n como un cron tonto.
+- **El mock es determinista por `(provider, tag)`**, sembrado con `sha256` y no con `hash()`,
+  que está aleatorizado por proceso vía `PYTHONHASHSEED`. Es lo que hace *demostrable* la
+  idempotencia: la segunda corrida del workflow tiene que terminar en cero menciones nuevas.
+  Subir `limit` conserva el prefijo de la lista anterior.
+- **`_fetch_raw` y `_normalize` están separados** en cada adapter. En la Etapa 5 se reemplaza
+  solo el primero por la llamada a Apify.
+- **Las claves de `metrics` están unificadas entre redes** donde el concepto coincide (`likes`
+  en ambas), para que el informe de la Etapa 4 pueda comparar X vs IG sin traducir campos.
+- **La respuesta va envuelta en `SearchResponse`**, no en una lista pelada: deja lugar para
+  paginación y obliga a usar el nodo *Split Out* de n8n, que es el patrón correcto.
+- `published_at` se ancla a la medianoche UTC del día, no al instante de la llamada, para que
+  dos llamadas seguidas no difieran por microsegundos.
+
+Contrato que queda publicado para n8n:
+
+```
+GET /sources                            -> ["mock_x", "mock_instagram"]
+GET /sources/{provider}/search?tag=&limit=
+    200 -> {provider, tag, count, mentions: [Mention]}
+    404 -> provider inexistente (el detail lista los válidos)
+    422 -> tag ausente/vacío, limit fuera de [1, 100]
+```
+
+### ⏭️ Etapa 2 — siguiente
+Análisis con LLM (ver §5): cliente de Groq con `llama-3.3-70b-versatile`, prompt de análisis
+sobre el copy, salida JSON estructurada validada con Pydantic, batching con reintentos,
+`POST /analyze` y tests con la respuesta del LLM mockeada.
+
+**Requisito para arrancar:** `GROQ_API_KEY` cargada en `.env` (la key se saca gratis en
+console.groq.com). Los tests no la necesitan, porque mockean la respuesta del modelo.
+
+### Deuda anotada (no bloquea, pero no la perdamos)
+- En Instagram `metrics.views` es `None` cuando el post no es video; en X siempre trae número.
+  El ranking por engagement de la Etapa 4 tiene que contemplar ese `None`.
+- El mock siempre devuelve exactamente `limit` elementos. Una fuente real devuelve *hasta*
+  `limit`, y a veces cero.
 
 ### Cómo retomar
 1. Abrir Docker Desktop y levantar el stack: `make up`.
 2. Verificar: `make ps` (postgres y api en `healthy`) y `curl localhost:8000/health`.
-3. Decirle a Claude: *"seguimos con la Etapa 1"*.
+3. Probar la captura: `curl "localhost:8000/sources/mock_x/search?tag=milei&limit=3"`.
+4. Decirle a Claude: *"seguimos con la Etapa 2"*.
 
 **Recordatorio para cuando toquemos el esquema:** `db/init/001_schema.sql` solo se ejecuta con
 el volumen de Postgres vacío. Si cambia el esquema, hace falta `make reset` (borra los datos) o
 pasar a migraciones de verdad.
+
+**Recordatorio de Docker:** cambiar código Python no requiere rebuild (`./api` está montado como
+volumen y uvicorn corre con `--reload`), pero cambiar `pyproject.toml` sí — las dependencias se
+instalan en la imagen durante el build. El síntoma de olvidarlo es un `ModuleNotFoundError` de
+una librería que jurás haber instalado.
