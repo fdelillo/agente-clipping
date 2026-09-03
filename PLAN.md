@@ -204,7 +204,31 @@ en vez de aceptarse a ciegas.
 - **Datos personales.** Estamos guardando posteos públicos con handles de autor. Si esto sale de
   tu máquina, hay que revisar retención y ToS de cada red.
 
-## 9. Primer paso concreto
+## 9. Estado actual
 
-Etapa 0 completa: repo inicializado, los cuatro servicios levantando con `docker compose up -d`,
-`/health` respondiendo y la tabla `mentions` creada y visible desde Adminer.
+**Última actualización: 2026-09-02.**
+
+### ✅ Etapa 0 — completa (commit `03985a2`)
+Los cuatro servicios levantan con `make up`. `/health` responde `{"status":"ok","db":"ok"}`,
+la tabla `mentions` existe con el esquema de §4, los tests pasan y desde el contenedor de n8n
+se alcanza `http://api:8000`. Repo git en `main` con el commit inicial, **sin remote**.
+
+Dos ajustes sobre la spec original de la etapa, ya aplicados:
+- No se setea `N8N_RUNNERS_ENABLED`: en n8n 2.37.7 los runners ya vienen activados y setear
+  esa variable es justamente lo que dispara un warning de deprecación.
+- Se agregó `api/.dockerignore` y el `uv.lock` se copia junto al `pyproject.toml` con
+  `uv sync --frozen`, para que el build sea reproducible y no hornee el `.venv` del host.
+
+### ⏭️ Etapa 1 — siguiente
+Modelo de datos y adapters (ver §5): modelos Pydantic `RawXPost` / `RawInstagramPost` /
+`Mention`, proveedor `mock` que genera payloads con la forma cruda real de cada red,
+normalización al esquema común, `GET /sources/{provider}/search` y tests.
+
+### Cómo retomar
+1. Abrir Docker Desktop y levantar el stack: `make up`.
+2. Verificar: `make ps` (postgres y api en `healthy`) y `curl localhost:8000/health`.
+3. Decirle a Claude: *"seguimos con la Etapa 1"*.
+
+**Recordatorio para cuando toquemos el esquema:** `db/init/001_schema.sql` solo se ejecuta con
+el volumen de Postgres vacío. Si cambia el esquema, hace falta `make reset` (borra los datos) o
+pasar a migraciones de verdad.
