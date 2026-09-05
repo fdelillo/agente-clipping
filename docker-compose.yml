@@ -55,6 +55,10 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       GROQ_API_KEY: ${GROQ_API_KEY}
+      # El catálogo de Groq cambia seguido (ya nos dio de baja un modelo),
+      # así que el modelo se pasa por entorno y no hay que tocar código
+      # para cambiarlo. El `:-` deja un default usable si no está en .env.
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
     healthcheck:
       # Pegamos al propio endpoint de salud de la app. Usamos python (que ya
       # está en la imagen) en vez de curl/wget para no agregar paquetes solo

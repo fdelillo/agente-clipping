@@ -134,7 +134,8 @@ los contenedores no se levanten solos cada vez que arrancás la Mac.
 - Tests con pytest sobre normalización y contrato.
 
 ### Etapa 2 — Análisis con LLM (Python + Groq)
-- Cliente de Groq con `llama-3.3-70b-versatile`.
+- Cliente de Groq con el modelo configurado en `GROQ_MODEL` (hoy `openai/gpt-oss-120b`; el
+  `llama-3.3-70b-versatile` del plan original fue dado de baja por Groq).
 - Prompt de análisis sobre el copy: sentimiento, score, temas, justificación breve.
 - **Salida estructurada en JSON validada con Pydantic** — nunca parsear texto libre del modelo.
 - Batching de varios copies por llamada, con reintentos y respeto del rate limit.
@@ -166,7 +167,7 @@ los contenedores no se levanten solos cada vez que arrancás la Mac.
 | Tema | Decisión | Motivo |
 | :--- | :--- | :--- |
 | Fuente de datos | Mock primero | Construir el pipeline completo sin gastar ni pelear con anti-bot |
-| LLM | Groq + Llama 3.3 | Free tier amplio y muy rápido; suficiente para clasificar copies |
+| LLM | Groq, modelo por `GROQ_MODEL` | Free tier amplio y muy rápido; suficiente para clasificar copies. El catálogo cambia seguido, por eso el modelo es una variable de entorno |
 | Transcripción | Groq Whisper API | Definido para cuando llegue el clipping; evita CPU Intel lenta |
 | Reparto | Balanceado n8n / Python | Único que enseña las dos herramientas de verdad |
 | Persistencia | Postgres | Idempotencia, evolución temporal y base del informe |
@@ -296,22 +297,108 @@ POST /analyze
   503  -> GROQ_API_KEY no configurada
 ```
 
-### ⏭️ Etapa 3 — siguiente
-El workflow de n8n (ver §3 y §5). Es la etapa central del objetivo de aprendizaje: Schedule
-Trigger, HTTP Request, nodo Postgres, IF/Filter, Merge, credenciales y error workflow. **Exportar
-el workflow a `n8n/workflows/*.json` y versionarlo** — si vive solo en el volumen de n8n, un
-`make reset` te lo borra.
+### 🔑 Groq: key cargada y modelo cambiado (2026-09-05)
 
-### Pendiente antes de probar en vivo
-`GROQ_API_KEY` no está cargada en `.env` (confirmado: `POST /analyze` devuelve 503 con el mensaje
-correcto). Se saca gratis y sin tarjeta en console.groq.com. Después de cargarla alcanza con
-`docker compose restart api` — no hace falta rebuild, porque solo cambia el `.env`.
+La `GROQ_API_KEY` ya está en `.env` y el análisis fue **probado en vivo**: captura del mock →
+`POST /analyze` → sentimiento, score, temas y justificación correctos. Dos cosas que costaron
+un rato y no queremos volver a pagar:
+
+- **`docker compose restart` NO relee el `.env`.** Reinicia el proceso dentro del contenedor
+  existente, que tiene su entorno fijado desde que se creó. Hay que **recrear** el contenedor:
+  `docker compose up -d api`. El síntoma es traicionero: la variable está en `.env`, el
+  contenedor se reinició sin errores, y la app sigue diciendo que no está configurada. Se
+  diagnostica con `docker compose exec api printenv GROQ_API_KEY`. (La instrucción anterior de
+  este documento, que decía que alcanzaba con `restart`, era incorrecta.)
+- **Groq dio de baja `llama-3.3-70b-versatile`.** Su catálogo ya no expone *ningún* Llama de
+  chat. El default pasó a `openai/gpt-oss-120b`, y ahora el modelo se pasa por entorno
+  (`GROQ_MODEL` en el compose y en `.env.example`) para que un cambio de catálogo no obligue a
+  tocar código — que era justamente lo que el comentario del setting había anticipado. Si vuelve
+  a aparecer un 404 `model_not_found`, la lista viva sale de
+  `GET https://api.groq.com/openai/v1/models` con la key.
+
+Detalle para depurar dentro del contenedor: `docker compose exec api python` levanta el Python
+del sistema, **sin** las dependencias del proyecto. El intérprete con `httpx` y compañía es
+`/app/.venv/bin/python`. Un script de diagnóstico que use `urllib` contra Groq además choca con
+Cloudflare (`error code: 1010`, bloqueo por User-Agent), así que conviene usar `httpx` del venv.
+
+### 🚧 Etapa 3 — en progreso (2026-09-05)
+
+El workflow de n8n. Se eligió el **modo híbrido** de construcción: el usuario arma a mano los
+nodos que enseñan la UI y las credenciales, y recibe hecho el mapeo tedioso.
+
+**Hecho:**
+- Cuenta de owner de n8n creada y workflow `Captura y analisis de menciones` (id `TdpP1g8HWOVgExny`).
+- Credencial de Postgres cargada una sola vez y reusada por los dos nodos Postgres.
+  Host `postgres` (el nombre del servicio de Compose), no `localhost`.
+- Primera mitad armada a mano y **verificada en vivo**: Schedule Trigger (cada 15 min) →
+  Code `Tags a monitorear` (2 providers × 2 tags = 4 items) → HTTP Request `Capturar menciones`
+  → Split Out `mentions` → Postgres `¿Ya existe?` → Merge por posición. Da **40 items**, cada
+  uno con los campos de la mención más `ya_existe: false`.
+- Segunda mitad generada como JSON e importada: Filter `Solo las nuevas`, Code
+  `Armar lote para /analyze`, HTTP Request `Analizar con LLM`, Split Out `resultados`,
+  `Merge análisis` y el mapeo del INSERT.
+
+**Diseño de la segunda mitad, para no tener que reconstruir el razonamiento:**
+
+```
+Merge ──> Solo las nuevas ──┬──> Armar lote ──> Analizar con LLM ──> Split Out resultados ──┐
+         (Filter)           │      (Code)         (POST /analyze)                            │
+                            │                                                                ▼
+                            └───────────────────────────────────────────────> Merge análisis ──> INSERT
+                                                                              (por external_id)
+```
+
+- **El Filter bifurca a dos destinos.** `/analyze` devuelve solo `{external_id, sentiment, ...}`,
+  no el `copy_text` ni el `permalink`: esos siguen vivos únicamente en la rama directa, y el
+  Merge final los vuelve a juntar. Sin esa bifurcación se pierde la mitad de la fila.
+- **El primer Merge combina por posición; el segundo, por `external_id`.** El primero puede
+  hacerlo porque `SELECT EXISTS` devuelve siempre exactamente una fila por mención, en orden. El
+  segundo no: ni los lotes de 100 ni la respuesta del LLM garantizan orden. Es el mismo riesgo
+  que la Etapa 2 ya había atacado del lado de Python ("la re-asociación va por índice explícito,
+  nunca por orden de la lista"), pagado con la misma moneda del lado de n8n.
+- **No hace falta un IF para cortar cuando no hay menciones nuevas:** n8n no ejecuta un nodo cuyo
+  input llegó vacío. En la segunda corrida el Filter deja 0 items y ni `/analyze` ni el INSERT se
+  ejecutan. Esa es la demostración de idempotencia que el mock determinista venía preparando
+  desde la Etapa 1.
+- **La dedup usa `SELECT EXISTS(...)` por mención, no un `WHERE id = ANY(...)` masivo.** Son N
+  queries en vez de una, pero EXISTS devuelve siempre una fila: con un SELECT común, las
+  menciones sin match no emitirían item y el Merge por posición se desalinearía en silencio.
+  Con `limit=10` la ineficiencia no importa. Anotado como deuda más abajo.
+- **El INSERT va con `Skip on Conflict`.** La deduplicación real la hace el Filter; el
+  `UNIQUE (provider, external_id)` es la última línea de defensa si dos ejecuciones se solapan.
+- Las queries usan **parámetros `$1`/`$2`** (campo *Query Parameters* del nodo), nunca
+  interpolación de texto: el `external_id` viene de una fuente externa.
+
+**Falta:**
+1. Ejecutar el workflow punta a punta y verificar que las 40 menciones llegan a `mentions` con
+   sentimiento. Ojo con los tipos en el INSERT: `metrics` es `jsonb` (va con `JSON.stringify`) y
+   `topics` es `text[]`. Si el nodo Postgres se pelea con esos tipos, el plan B es cambiar ese
+   nodo a *Execute Query* con un `INSERT ... ON CONFLICT DO NOTHING` parametrizado.
+2. Correr el workflow una segunda vez y confirmar que el Filter deja **0 items** (idempotencia).
+3. El **error workflow** que avise cuando algo falla (parte de la etapa, ver §5).
+4. Activar el Schedule Trigger (hoy el workflow está inactivo).
+
+**Aprendizajes de n8n de esta sesión:**
+- Al armar el esqueleto siguiendo una lista numerada es fácil confundir *el orden de los nodos*
+  con *el orden de las conexiones*: el INSERT quedó colgando en paralelo al SELECT, o sea
+  insertando cada mención apenas capturada, sin deduplicar ni analizar.
+- Un valor que va al **nombre del nodo** en vez de al campo del parámetro da un error confuso
+  (`The 'mentions' node has issues: Parameter "Fields To Split Out" is required`).
+- En el export JSON, las expresiones se reconocen por el **`=` que n8n antepone** al valor
+  (`"url": "=http://api:8000/..."`). Si falta ese `=`, el campo quedó en modo texto literal y
+  las llaves `{{ }}` no se evalúan. Es la forma más rápida de auditar un workflow entero.
+- `docker compose exec n8n n8n export:workflow --all --output=/tmp/wf.json` vuelca el workflow
+  para inspeccionarlo desde afuera, pero **solo exporta lo guardado**: si la UI tiene cambios sin
+  guardar, no aparecen.
 
 ### Deuda anotada (no bloquea, pero no la perdamos)
 - En Instagram `metrics.views` es `None` cuando el post no es video; en X siempre trae número.
   El ranking por engagement de la Etapa 4 tiene que contemplar ese `None`.
 - El mock siempre devuelve exactamente `limit` elementos. Una fuente real devuelve *hasta*
   `limit`, y a veces cero.
+- La dedup del workflow hace una query por mención (`SELECT EXISTS`). Correcto y simple, pero si
+  algún día se sube mucho el `limit`, conviene pasar a una sola query con `= ANY($1::text[])` y
+  resolver la correlación con un Merge por campo en vez de por posición.
 
 ### Cómo retomar
 
@@ -319,40 +406,45 @@ correcto). Se saca gratis y sin tarjeta en console.groq.com. Después de cargarl
 `main` trackea `origin/main`, working tree limpio, 39 tests en verde. La autenticación con
 GitHub es vía `gh` CLI (ya instalado y logueado como `fdelillo`), protocolo HTTPS.
 
+**Estado de n8n:** el workflow completo (12 nodos) ya está importado en n8n **y** versionado en
+`n8n/workflows/captura-y-analisis-de-menciones.json`. Nunca fue ejecutado punta a punta: la
+primera mitad sí (da 40 items), de `Solo las nuevas` en adelante no se probó nunca.
+
 **Pasos:**
 1. Abrir Docker Desktop y levantar el stack: `make up`.
 2. Verificar: `make ps` (postgres y api en `healthy`) y `curl localhost:8000/health`.
 3. Probar la captura: `curl "localhost:8000/sources/mock_x/search?tag=milei&limit=3"`.
    Los `external_id` tienen que ser `599518440855865178`, `227823812536014777`,
    `720079261720601226` — son deterministas, si cambiaron algo se rompió.
-4. Decirle a Claude: *"seguimos con la Etapa 3"*.
+4. Abrir `localhost:5678`, entrar al workflow y darle **Execute Workflow**. Es la primera
+   ejecución punta a punta: lo que hay que mirar es si el nodo INSERT se pelea con `metrics`
+   (`jsonb`) o `topics` (`text[]`).
+5. Decirle a Claude: *"seguimos con la Etapa 3"*.
 
-**Dos decisiones quedaron abiertas al cortar la sesión:**
+**Si el workflow de n8n se perdió** (un `make reset` borra el volumen `n8n_data`), se recupera
+con el JSON versionado:
 
-1. **Cómo construir el workflow de n8n.** Es la etapa central del objetivo de aprendizaje, y hay
-   tres formas de encararla, con distinto balance entre velocidad y cuánto se aprende:
-   - Construirlo juntos en la UI de n8n (`localhost:5678`), nodo por nodo, verificando con datos
-     reales en cada paso. Es lo más lento y lo que más enseña. *Recomendado.*
-   - Que Claude genere el JSON completo y se importe de una, y después recorrer qué hace cada
-     nodo. Rápido, pero se aprende leyendo en vez de haciendo.
-   - Híbrido: armar a mano el Schedule Trigger, el HTTP Request y el nodo Postgres (para agarrar
-     la UI y las credenciales) y recibir hecho lo tedioso (IF, Merge y el mapeo del INSERT).
+```
+docker compose cp n8n/workflows/captura-y-analisis-de-menciones.json n8n:/tmp/import.json
+docker compose exec n8n n8n import:workflow --input=/tmp/import.json
+```
 
-2. **La `GROQ_API_KEY` todavía no está cargada.** Confirmado: `POST /analyze` devuelve 503 con el
-   mensaje correcto. La Etapa 3 se puede construir igual —el nodo de `/analyze` va a fallar, lo
-   que de paso es una buena excusa para configurar el error workflow, que es parte de la etapa—
-   pero para ver análisis reales hace falta la key.
+Como el JSON conserva el `id` del workflow, importar **actualiza** el existente en vez de
+duplicarlo. Lo que el import **no** trae son las credenciales: hay que volver a cargar la de
+Postgres a mano (Host `postgres`, base `social_listening`, usuario y password del `.env`).
+Después de importar, refrescar la pestaña del navegador — si la UI tenía el workflow abierto con
+cambios sin guardar, al guardar pisa lo importado.
 
 **Qué es la `GROQ_API_KEY`** (quedó explicado en la sesión, se resume acá para no perderlo):
-Groq es un proveedor que corre modelos open source (acá, Llama 3.3 de Meta) en su hardware y los
-expone por HTTP. La API key es la credencial que identifica la cuenta en cada llamada — el mismo
-concepto que la contraseña de Postgres que ya está en el `.env`. Se saca gratis y sin tarjeta en
+Groq es un proveedor que corre modelos open source en su hardware y los expone por HTTP. La API
+key es la credencial que identifica la cuenta en cada llamada — el mismo concepto que la
+contraseña de Postgres que ya está en el `.env`. Se saca gratis y sin tarjeta en
 console.groq.com → *API Keys* → *Create API Key*; se muestra una sola vez, así que hay que
 copiarla en el momento (si se pierde, se genera otra). Va en el `.env`, en la línea
-`GROQ_API_KEY=` que ya está esperándola, y después alcanza con `docker compose restart api` —no
-hace falta rebuild, porque solo cambia el `.env`. El free tier limita *requests por minuto*, no
-volumen total, y por eso la Etapa 2 manda 20 copies juntos en una sola llamada y reintenta con
-espera ante un 429.
+`GROQ_API_KEY=`, y después hay que **recrear** el contenedor con `docker compose up -d api` (ver
+más arriba: `restart` no alcanza). No hace falta rebuild, porque solo cambia el `.env`. El free
+tier limita *requests por minuto*, no volumen total, y por eso la Etapa 2 manda 20 copies juntos
+en una sola llamada y reintenta con espera ante un 429.
 
 **Recordatorio para cuando toquemos el esquema:** `db/init/001_schema.sql` solo se ejecuta con
 el volumen de Postgres vacío. Si cambia el esquema, hace falta `make reset` (borra los datos) o

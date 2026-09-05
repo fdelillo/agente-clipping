@@ -1,0 +1,454 @@
+[
+  {
+    "updatedAt": "2026-09-05T16:19:54.434Z",
+    "createdAt": "2026-09-05T15:52:41.894Z",
+    "id": "TdpP1g8HWOVgExny",
+    "name": "Captura y analisis de menciones",
+    "description": null,
+    "active": false,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "minutes",
+                "minutesInterval": 15
+              }
+            ]
+          }
+        },
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.4,
+        "position": [
+          0,
+          -144
+        ],
+        "id": "488e45be-62e2-49db-b2be-9f18a0eb0d58",
+        "name": "Schedule Trigger"
+      },
+      {
+        "parameters": {
+          "mode": "combine",
+          "combineBy": "combineByPosition",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.merge",
+        "typeVersion": 3.2,
+        "position": [
+          1120,
+          -144
+        ],
+        "id": "0628abb8-28f5-450e-9030-9297f0885e8f",
+        "name": "Merge"
+      },
+      {
+        "parameters": {
+          "schema": {
+            "__rl": true,
+            "mode": "list",
+            "value": "public"
+          },
+          "table": {
+            "__rl": true,
+            "mode": "list",
+            "value": "mentions"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "provider": "={{ $json.provider }}",
+              "external_id": "={{ $json.external_id }}",
+              "tag": "={{ $json.tag }}",
+              "author_handle": "={{ $json.author_handle }}",
+              "copy_text": "={{ $json.copy_text }}",
+              "permalink": "={{ $json.permalink }}",
+              "published_at": "={{ $json.published_at }}",
+              "metrics": "={{ JSON.stringify($json.metrics) }}",
+              "sentiment": "={{ $json.sentiment }}",
+              "sentiment_score": "={{ $json.sentiment_score }}",
+              "topics": "={{ $json.topics }}",
+              "llm_rationale": "={{ $json.llm_rationale }}",
+              "analyzed_at": "={{ $json.analyzed_at }}"
+            },
+            "matchingColumns": [],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": false
+          },
+          "options": {
+            "skipOnConflict": true
+          }
+        },
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.7,
+        "position": [
+          2464,
+          -144
+        ],
+        "id": "250d7fb8-583c-443a-9142-c8ae495984cc",
+        "name": "Insert rows in a table",
+        "credentials": {
+          "postgres": {
+            "id": "n6wUo7RMLKCRfMLt",
+            "name": "Postgres account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "// Un item por combinación de red × tag. n8n itera los nodos siguientes\n// automáticamente, así que 2 providers × 2 tags = 4 llamadas a la API.\nconst tags = ['milei', 'inflacion'];\nconst providers = ['mock_x', 'mock_instagram'];\n\nreturn providers.flatMap((provider) =>\n  tags.map((tag) => ({ json: { provider, tag } }))\n);"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          224,
+          -144
+        ],
+        "id": "1d5d5d7a-7dc3-4792-bd45-4550fceac21e",
+        "name": "Tags a monitorear"
+      },
+      {
+        "parameters": {
+          "url": "=http://api:8000/sources/{{ $json.provider }}/search",
+          "sendQuery": true,
+          "queryParameters": {
+            "parameters": [
+              {
+                "name": "tag",
+                "value": "={{ $json.tag }}"
+              },
+              {
+                "name": "limit",
+                "value": "10"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          448,
+          -144
+        ],
+        "id": "77f555f8-d09e-4f77-acc1-79aace01b18a",
+        "name": "Capturar menciones"
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT EXISTS (\n  SELECT 1 FROM mentions WHERE provider = $1 AND external_id = $2\n) AS ya_existe;",
+          "options": {
+            "queryReplacement": "={{ $json.provider }}, {{ $json.external_id }}"
+          }
+        },
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.7,
+        "position": [
+          896,
+          -224
+        ],
+        "id": "d341662b-bff0-469d-a36b-6910ef57d051",
+        "name": "¿Ya existe?",
+        "credentials": {
+          "postgres": {
+            "id": "n6wUo7RMLKCRfMLt",
+            "name": "Postgres account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "fieldToSplitOut": "mentions",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.splitOut",
+        "typeVersion": 1,
+        "position": [
+          672,
+          -144
+        ],
+        "id": "171fe993-1698-41ca-8704-1075ff78c8be",
+        "name": "Split Out"
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "cf3a613e-4058-4340-883a-29b1fb68b961",
+                "leftValue": "={{ $json.ya_existe }}",
+                "rightValue": false,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "false",
+                  "singleValue": true
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "type": "n8n-nodes-base.filter",
+        "typeVersion": 2.2,
+        "position": [
+          1344,
+          -144
+        ],
+        "id": "28ff6fcc-93aa-43a5-b871-0300ad77deff",
+        "name": "Solo las nuevas"
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "jsCode": "// POST /analyze acepta entre 1 y 100 items por request, así que partimos las\n// menciones nuevas en lotes de a 100. Cada lote sale como un item propio y\n// n8n dispara el HTTP Request una vez por cada uno.\nconst menciones = $input.all().map((item) => ({\n  external_id: item.json.external_id,\n  copy_text: item.json.copy_text,\n}));\n\nconst TAMANO_LOTE = 100;\nconst lotes = [];\nfor (let i = 0; i < menciones.length; i += TAMANO_LOTE) {\n  lotes.push({ json: { items: menciones.slice(i, i + TAMANO_LOTE) } });\n}\n\nreturn lotes;"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1568,
+          -144
+        ],
+        "id": "58086fa1-867f-40a1-90e0-3dd17e83aa24",
+        "name": "Armar lote para /analyze"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://api:8000/analyze",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify($json) }}",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.5,
+        "position": [
+          1792,
+          -144
+        ],
+        "id": "136ee8f2-9e0f-415c-a09f-d2ab9c79faea",
+        "name": "Analizar con LLM"
+      },
+      {
+        "parameters": {
+          "fieldToSplitOut": "results",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.splitOut",
+        "typeVersion": 1,
+        "position": [
+          2016,
+          -144
+        ],
+        "id": "eae64003-eb8a-4ebc-8db8-60f5881e650c",
+        "name": "Split Out resultados"
+      },
+      {
+        "parameters": {
+          "mode": "combine",
+          "combineBy": "combineByFields",
+          "fieldsToMatchString": "external_id",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.merge",
+        "typeVersion": 3.2,
+        "position": [
+          2240,
+          -144
+        ],
+        "id": "ffe3f3f4-3cdc-47d7-a341-5e3c0a8ad0d8",
+        "name": "Merge análisis"
+      }
+    ],
+    "connections": {
+      "Schedule Trigger": {
+        "main": [
+          [
+            {
+              "node": "Tags a monitorear",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Insert rows in a table": {
+        "main": [
+          []
+        ]
+      },
+      "Tags a monitorear": {
+        "main": [
+          [
+            {
+              "node": "Capturar menciones",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Capturar menciones": {
+        "main": [
+          [
+            {
+              "node": "Split Out",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "¿Ya existe?": {
+        "main": [
+          [
+            {
+              "node": "Merge",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Split Out": {
+        "main": [
+          [
+            {
+              "node": "¿Ya existe?",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Merge",
+              "type": "main",
+              "index": 1
+            }
+          ]
+        ]
+      },
+      "Merge": {
+        "main": [
+          [
+            {
+              "node": "Solo las nuevas",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Solo las nuevas": {
+        "main": [
+          [
+            {
+              "node": "Armar lote para /analyze",
+              "type": "main",
+              "index": 0
+            },
+            {
+              "node": "Merge análisis",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Armar lote para /analyze": {
+        "main": [
+          [
+            {
+              "node": "Analizar con LLM",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Analizar con LLM": {
+        "main": [
+          [
+            {
+              "node": "Split Out resultados",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Split Out resultados": {
+        "main": [
+          [
+            {
+              "node": "Merge análisis",
+              "type": "main",
+              "index": 1
+            }
+          ]
+        ]
+      },
+      "Merge análisis": {
+        "main": [
+          [
+            {
+              "node": "Insert rows in a table",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "binaryMode": "separate",
+      "timeSavedMode": "fixed",
+      "callerPolicy": "workflowsFromSameOwner",
+      "availableInMCP": false
+    },
+    "staticData": null,
+    "meta": {
+      "templateCredsSetupCompleted": true
+    },
+    "nodeGroups": [],
+    "pinData": {},
+    "versionId": "01fa0140-4098-49b6-87c1-8cd3e56cd1ce",
+    "activeVersionId": null,
+    "versionCounter": 52,
+    "triggerCount": 0,
+    "sourceWorkflowId": null,
+    "tags": [],
+    "shared": [
+      {
+        "updatedAt": "2026-09-05T15:52:41.901Z",
+        "createdAt": "2026-09-05T15:52:41.901Z",
+        "role": "workflow:owner",
+        "workflowId": "TdpP1g8HWOVgExny",
+        "projectId": "zIdq9fJ1sNVnJRtC",
+        "project": {
+          "updatedAt": "2026-09-05T15:51:33.986Z",
+          "createdAt": "2026-09-02T19:09:05.562Z",
+          "id": "zIdq9fJ1sNVnJRtC",
+          "name": "Federico De LIllo <federicodelillo@gmail.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "customTelemetryTags": [],
+          "creatorId": "43d0f031-078d-4217-932f-0714585e332a"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

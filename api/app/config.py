@@ -25,7 +25,12 @@ class Settings(BaseSettings):
     # Configurable porque el catálogo de modelos disponibles en Groq
     # cambia con cierta frecuencia y no queremos que eso implique tocar
     # código, solo la variable de entorno.
-    groq_model: str = "llama-3.3-70b-versatile"
+    #
+    # Esa previsión se cobró rápido: el default original era
+    # `llama-3.3-70b-versatile` y Groq lo dio de baja — hoy su catálogo no
+    # expone ningún Llama de chat. Si esto vuelve a fallar con un 404
+    # `model_not_found`, la lista viva está en GET /openai/v1/models.
+    groq_model: str = "openai/gpt-oss-120b"
 
     # Timeout explícito del cliente httpx contra Groq. El default de
     # AsyncClient sin argumentos ya trae un timeout razonable, pero
