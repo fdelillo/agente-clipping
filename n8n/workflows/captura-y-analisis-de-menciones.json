@@ -1,11 +1,11 @@
 [
   {
-    "updatedAt": "2026-09-05T16:19:54.434Z",
+    "updatedAt": "2026-09-06T13:23:54.000Z",
     "createdAt": "2026-09-05T15:52:41.894Z",
     "id": "TdpP1g8HWOVgExny",
     "name": "Captura y analisis de menciones",
     "description": null,
-    "active": false,
+    "active": true,
     "isArchived": false,
     "nodes": [
       {
@@ -23,7 +23,7 @@
         "typeVersion": 1.4,
         "position": [
           0,
-          -144
+          -192
         ],
         "id": "488e45be-62e2-49db-b2be-9f18a0eb0d58",
         "name": "Schedule Trigger"
@@ -38,7 +38,7 @@
         "typeVersion": 3.2,
         "position": [
           1120,
-          -144
+          -192
         ],
         "id": "0628abb8-28f5-450e-9030-9297f0885e8f",
         "name": "Merge"
@@ -84,7 +84,7 @@
         "typeVersion": 2.7,
         "position": [
           2464,
-          -144
+          -192
         ],
         "id": "250d7fb8-583c-443a-9142-c8ae495984cc",
         "name": "Insert rows in a table",
@@ -103,7 +103,7 @@
         "typeVersion": 2,
         "position": [
           224,
-          -144
+          -192
         ],
         "id": "1d5d5d7a-7dc3-4792-bd45-4550fceac21e",
         "name": "Tags a monitorear"
@@ -130,7 +130,7 @@
         "typeVersion": 4.5,
         "position": [
           448,
-          -144
+          -192
         ],
         "id": "77f555f8-d09e-4f77-acc1-79aace01b18a",
         "name": "Capturar menciones"
@@ -147,7 +147,7 @@
         "typeVersion": 2.7,
         "position": [
           896,
-          -224
+          -272
         ],
         "id": "d341662b-bff0-469d-a36b-6910ef57d051",
         "name": "¿Ya existe?",
@@ -167,7 +167,7 @@
         "typeVersion": 1,
         "position": [
           672,
-          -144
+          -192
         ],
         "id": "171fe993-1698-41ca-8704-1075ff78c8be",
         "name": "Split Out"
@@ -201,21 +201,20 @@
         "typeVersion": 2.2,
         "position": [
           1344,
-          -144
+          -192
         ],
         "id": "28ff6fcc-93aa-43a5-b871-0300ad77deff",
         "name": "Solo las nuevas"
       },
       {
         "parameters": {
-          "mode": "runOnceForAllItems",
           "jsCode": "// POST /analyze acepta entre 1 y 100 items por request, así que partimos las\n// menciones nuevas en lotes de a 100. Cada lote sale como un item propio y\n// n8n dispara el HTTP Request una vez por cada uno.\nconst menciones = $input.all().map((item) => ({\n  external_id: item.json.external_id,\n  copy_text: item.json.copy_text,\n}));\n\nconst TAMANO_LOTE = 100;\nconst lotes = [];\nfor (let i = 0; i < menciones.length; i += TAMANO_LOTE) {\n  lotes.push({ json: { items: menciones.slice(i, i + TAMANO_LOTE) } });\n}\n\nreturn lotes;"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
           1568,
-          -144
+          -128
         ],
         "id": "58086fa1-867f-40a1-90e0-3dd17e83aa24",
         "name": "Armar lote para /analyze"
@@ -233,7 +232,7 @@
         "typeVersion": 4.5,
         "position": [
           1792,
-          -144
+          -128
         ],
         "id": "136ee8f2-9e0f-415c-a09f-d2ab9c79faea",
         "name": "Analizar con LLM"
@@ -247,7 +246,7 @@
         "typeVersion": 1,
         "position": [
           2016,
-          -144
+          -128
         ],
         "id": "eae64003-eb8a-4ebc-8db8-60f5881e650c",
         "name": "Split Out resultados"
@@ -255,7 +254,6 @@
       {
         "parameters": {
           "mode": "combine",
-          "combineBy": "combineByFields",
           "fieldsToMatchString": "external_id",
           "options": {}
         },
@@ -263,7 +261,7 @@
         "typeVersion": 3.2,
         "position": [
           2240,
-          -144
+          -192
         ],
         "id": "ffe3f3f4-3cdc-47d7-a341-5e3c0a8ad0d8",
         "name": "Merge análisis"
@@ -412,18 +410,28 @@
       "binaryMode": "separate",
       "timeSavedMode": "fixed",
       "callerPolicy": "workflowsFromSameOwner",
-      "availableInMCP": false
+      "availableInMCP": false,
+      "errorWorkflow": "DYj6RDBA6ohgakFB"
     },
-    "staticData": null,
+    "staticData": {
+      "node:Schedule Trigger": {
+        "recurrenceRules": [
+          null
+        ],
+        "recurrenceRuleSignatures": [
+          null
+        ]
+      }
+    },
     "meta": {
       "templateCredsSetupCompleted": true
     },
     "nodeGroups": [],
     "pinData": {},
-    "versionId": "01fa0140-4098-49b6-87c1-8cd3e56cd1ce",
-    "activeVersionId": null,
-    "versionCounter": 52,
-    "triggerCount": 0,
+    "versionId": "995336c3-3bcc-4b8a-bfdb-f48381c0d7fd",
+    "activeVersionId": "995336c3-3bcc-4b8a-bfdb-f48381c0d7fd",
+    "versionCounter": 57,
+    "triggerCount": 1,
     "sourceWorkflowId": null,
     "tags": [],
     "shared": [

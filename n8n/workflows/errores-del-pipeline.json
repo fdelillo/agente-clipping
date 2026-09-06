@@ -1,0 +1,142 @@
+[
+  {
+    "updatedAt": "2026-09-06T13:23:59.000Z",
+    "createdAt": "2026-09-05T22:37:15.192Z",
+    "id": "DYj6RDBA6ohgakFB",
+    "name": "Errores del pipeline",
+    "description": null,
+    "active": true,
+    "isArchived": false,
+    "nodes": [
+      {
+        "parameters": {},
+        "type": "n8n-nodes-base.errorTrigger",
+        "typeVersion": 1,
+        "position": [
+          0,
+          0
+        ],
+        "id": "0869da4f-db6c-4889-be1c-abf3284d2071",
+        "name": "Error Trigger"
+      },
+      {
+        "parameters": {
+          "jsCode": "// El Error Trigger entrega el contexto crudo de la ejecución que falló.\n// Lo aplanamos a algo legible, para que el archivo sirva sin tener que\n// abrir n8n para entenderlo.\nconst e = $json.execution ?? {};\nconst w = $json.workflow ?? {};\n\nreturn [{\n  json: {\n    ocurrido_en: new Date().toISOString(),\n    workflow: w.name ?? null,\n    ejecucion_id: e.id ?? null,\n    ejecucion_url: e.url ?? null,\n    nodo_que_fallo: e.lastNodeExecuted ?? null,\n    modo: e.mode ?? null,\n    mensaje: e.error?.message ?? null,\n    stack: e.error?.stack ?? null,\n  },\n}];"
+        },
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          224,
+          0
+        ],
+        "id": "19520254-61f1-4c8a-8dc2-6705a0f40bc6",
+        "name": "Resumir el error"
+      },
+      {
+        "parameters": {
+          "operation": "toJson",
+          "mode": "each",
+          "options": {
+            "format": true
+          }
+        },
+        "type": "n8n-nodes-base.convertToFile",
+        "typeVersion": 1.1,
+        "position": [
+          448,
+          0
+        ],
+        "id": "f5de2035-686b-4990-9aa1-6822bdebfb8d",
+        "name": "Convert to File"
+      },
+      {
+        "parameters": {
+          "operation": "write",
+          "fileName": "=/data/errores/{{ $now.toFormat('yyyy-MM-dd_HHmmss') }}-ejecucion-{{ $('Resumir el error').first().json.ejecucion_id }}.json",
+          "options": {}
+        },
+        "type": "n8n-nodes-base.readWriteFile",
+        "typeVersion": 1.1,
+        "position": [
+          672,
+          0
+        ],
+        "id": "81ae07a5-1742-42e4-8532-e57a55a5ae73",
+        "name": "Read/Write Files from Disk"
+      }
+    ],
+    "connections": {
+      "Error Trigger": {
+        "main": [
+          [
+            {
+              "node": "Resumir el error",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Resumir el error": {
+        "main": [
+          [
+            {
+              "node": "Convert to File",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Convert to File": {
+        "main": [
+          [
+            {
+              "node": "Read/Write Files from Disk",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "binaryMode": "separate"
+    },
+    "staticData": null,
+    "meta": null,
+    "nodeGroups": [],
+    "pinData": {},
+    "versionId": "bd537383-2a9c-49d9-8aaa-af1fd756bcd8",
+    "activeVersionId": "bd537383-2a9c-49d9-8aaa-af1fd756bcd8",
+    "versionCounter": 11,
+    "triggerCount": 0,
+    "sourceWorkflowId": null,
+    "tags": [],
+    "shared": [
+      {
+        "updatedAt": "2026-09-05T22:37:15.198Z",
+        "createdAt": "2026-09-05T22:37:15.198Z",
+        "role": "workflow:owner",
+        "workflowId": "DYj6RDBA6ohgakFB",
+        "projectId": "zIdq9fJ1sNVnJRtC",
+        "project": {
+          "updatedAt": "2026-09-05T15:51:33.986Z",
+          "createdAt": "2026-09-02T19:09:05.562Z",
+          "id": "zIdq9fJ1sNVnJRtC",
+          "name": "Federico De LIllo <federicodelillo@gmail.com>",
+          "type": "personal",
+          "icon": null,
+          "description": null,
+          "customTelemetryTags": [],
+          "creatorId": "43d0f031-078d-4217-932f-0714585e332a"
+        }
+      }
+    ],
+    "versionMetadata": {
+      "name": null,
+      "description": null
+    }
+  }
+]

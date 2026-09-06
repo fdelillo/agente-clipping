@@ -17,3 +17,6 @@ compartido/*
 !compartido/informes/
 compartido/informes/*
 !compartido/informes/.gitkeep
+!compartido/errores/
+compartido/errores/*
+!compartido/errores/.gitkeep

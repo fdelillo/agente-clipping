@@ -321,10 +321,16 @@ del sistema, **sin** las dependencias del proyecto. El intérprete con `httpx` y
 `/app/.venv/bin/python`. Un script de diagnóstico que use `urllib` contra Groq además choca con
 Cloudflare (`error code: 1010`, bloqueo por User-Agent), así que conviene usar `httpx` del venv.
 
-### 🚧 Etapa 3 — en progreso (2026-09-05)
+### ✅ Etapa 3 — completa (2026-09-06)
 
-El workflow de n8n. Se eligió el **modo híbrido** de construcción: el usuario arma a mano los
-nodos que enseñan la UI y las credenciales, y recibe hecho el mapeo tedioso.
+El workflow de n8n, probado en producción. Se eligió el **modo híbrido** de construcción: el
+usuario arma a mano los nodos que enseñan la UI y las credenciales, y recibe hecho el mapeo
+tedioso.
+
+**Estado final:** los dos workflows están **activos**, versionados en `n8n/workflows/`, y el
+pipeline corre solo cada 15 minutos. Verificado punta a punta: 40 menciones capturadas,
+analizadas e insertadas; corridas siguientes sin duplicar nada; y una caída provocada de la API
+que disparó el error workflow y quedó registrada en `./compartido/errores/`.
 
 **Hecho:**
 - Cuenta de owner de n8n creada y workflow `Captura y analisis de menciones` (id `TdpP1g8HWOVgExny`).
@@ -369,16 +375,64 @@ Merge ──> Solo las nuevas ──┬──> Armar lote ──> Analizar con L
 - Las queries usan **parámetros `$1`/`$2`** (campo *Query Parameters* del nodo), nunca
   interpolación de texto: el `external_id` viene de una fuente externa.
 
-**Falta:**
-1. Ejecutar el workflow punta a punta y verificar que las 40 menciones llegan a `mentions` con
-   sentimiento. Ojo con los tipos en el INSERT: `metrics` es `jsonb` (va con `JSON.stringify`) y
-   `topics` es `text[]`. Si el nodo Postgres se pelea con esos tipos, el plan B es cambiar ese
-   nodo a *Execute Query* con un `INSERT ... ON CONFLICT DO NOTHING` parametrizado.
-2. Correr el workflow una segunda vez y confirmar que el Filter deja **0 items** (idempotencia).
-3. El **error workflow** que avise cuando algo falla (parte de la etapa, ver §5).
-4. Activar el Schedule Trigger (hoy el workflow está inactivo).
+**Verificado:**
+1. **Ejecución punta a punta:** 40 filas en `mentions`, las 40 con `analyzed_at`. Los tipos que
+   preocupaban entraron bien: `metrics` como `jsonb` real (gracias al `JSON.stringify` en el
+   mapeo) y `topics` como `text[]` real (lo resolvió el driver solo). No hizo falta el plan B de
+   pasar el INSERT a *Execute Query*.
+2. **Idempotencia:** la segunda corrida deja 0 items en `Solo las nuevas` y los nodos siguientes
+   ni se ejecutan. Cuatro ejecuciones de producción seguidas dejaron la tabla en 40 filas.
+3. **Error workflow probado de verdad**, apagando la API con `docker compose stop api` mientras
+   el workflow corría activo. La secuencia quedó registrada en `execution_entity`: la ejecución
+   del principal en `error`, la del workflow de errores en `success`, y al volver la API el
+   pipeline se recuperó solo sin intervención.
+4. **Ambos workflows activos**, el principal cada 15 minutos.
+
+Para desactivarlos: el toggle de la UI, o
+`docker compose exec n8n n8n update:workflow --id=<id> --active=false` seguido de
+`docker compose restart n8n`.
+
+**Diseño del error workflow (`Errores del pipeline`, id `DYj6RDBA6ohgakFB`, 4 nodos):**
+`Error Trigger → Resumir el error (Code) → Convert to File → Read/Write Files from Disk`, que
+deja un JSON por falla en `/data/errores/` (o sea `./compartido/errores/` en la Mac). El archivo
+guarda `nodo_que_fallo`, `mensaje` y `ejecucion_url`, que es lo que permite ir directo a la
+ejecución concreta en la UI sin buscarla a mano.
+
+Ahí aparece un concepto de n8n que no habíamos tocado: **los datos binarios**. Un item tiene dos
+mitades, `json` y `binary`. El nodo Code solo produce `json`, y para escribir un archivo hace
+falta un adjunto binario: eso es lo que hace `Convert to File`, que mueve el JSON a la mitad
+binaria bajo la clave `data` — la misma que después se nombra en *Input Binary Field*. Es el
+mecanismo que va a reusar el informe de la Etapa 4.
 
 **Aprendizajes de n8n de esta sesión:**
+- **El workflow de errores también tiene que estar activo.** Si no, la falla se pierde con un
+  `Workflow "<id>" is not active and cannot be executed` que solo aparece en
+  `docker compose logs n8n`. Es exactamente el modo de fallo que un error workflow debería
+  prevenir, y no avisa de ninguna forma visible.
+- **n8n bloquea el filesystem por defecto** en los nodos de archivos: fallan con
+  `Access to the file is not allowed`, que no es un permiso de Unix. Se resuelve con
+  `N8N_RESTRICT_FILE_ACCESS_TO=/data` en el compose — declarando solo el volumen compartido, no
+  abriendo todo.
+- **Activar un workflow por CLI exige `docker compose restart n8n`**, porque el scheduler se arma
+  al arrancar. Desde la UI no hace falta. Y `update:workflow` ya está marcado como deprecado, así
+  que en algún momento habrá que pasar a la API REST de n8n.
+- **La UI esconde controles mientras hay cambios sin guardar:** el toggle `Active` y el
+  desplegable *Error Workflow* aparecen en gris o directamente no están. Regla práctica: guardar
+  antes de buscar cualquier control de estado del workflow.
+- **El error workflow puede fallar en silencio.** Estuvo cuatro ciclos terminando en `error` sin
+  que nada avisara, porque no hay un error workflow del error workflow. Cuando esto crezca, el
+  aviso no debería depender de escribir un archivo local sino de algo que uno mire (mail,
+  Telegram, o una fila en Postgres que el informe levante).
+- **Cómo diagnosticar n8n sin la UI**, que es lo que terminó resolviendo el problema:
+  ```
+  docker compose logs n8n --since=5m
+  docker compose cp n8n:/home/node/.n8n/database.sqlite ./tmp.sqlite   # + -wal y -shm
+  # execution_entity: id, workflowId, status, mode  -> qué corrió y si falló
+  # execution_data:   el detalle, en el formato "flatted" de n8n
+  ```
+  **Hay que copiar también `database.sqlite-wal` y `-shm`.** SQLite corre en modo WAL: copiando
+  solo el `.sqlite` se obtiene una foto vieja, sin las ejecuciones recientes. Nos hizo perder un
+  rato creyendo que el workflow no había corrido.
 - Al armar el esqueleto siguiendo una lista numerada es fácil confundir *el orden de los nodos*
   con *el orden de las conexiones*: el INSERT quedó colgando en paralelo al SELECT, o sea
   insertando cada mención apenas capturada, sin deduplicar ni analizar.
@@ -406,9 +460,10 @@ Merge ──> Solo las nuevas ──┬──> Armar lote ──> Analizar con L
 `main` trackea `origin/main`, working tree limpio, 39 tests en verde. La autenticación con
 GitHub es vía `gh` CLI (ya instalado y logueado como `fdelillo`), protocolo HTTPS.
 
-**Estado de n8n:** el workflow completo (12 nodos) ya está importado en n8n **y** versionado en
-`n8n/workflows/captura-y-analisis-de-menciones.json`. Nunca fue ejecutado punta a punta: la
-primera mitad sí (da 40 items), de `Solo las nuevas` en adelante no se probó nunca.
+**Estado de n8n:** los dos workflows están **activos** y versionados en `n8n/workflows/`. El
+principal corre cada 15 minutos por su cuenta mientras Docker esté levantado. Como el mock es
+determinista, esas corridas no insertan nada nuevo ni gastan LLM: el Filter deja 0 items y el
+pipeline se corta ahí.
 
 **Pasos:**
 1. Abrir Docker Desktop y levantar el stack: `make up`.
@@ -416,24 +471,24 @@ primera mitad sí (da 40 items), de `Solo las nuevas` en adelante no se probó n
 3. Probar la captura: `curl "localhost:8000/sources/mock_x/search?tag=milei&limit=3"`.
    Los `external_id` tienen que ser `599518440855865178`, `227823812536014777`,
    `720079261720601226` — son deterministas, si cambiaron algo se rompió.
-4. Abrir `localhost:5678`, entrar al workflow y darle **Execute Workflow**. Es la primera
-   ejecución punta a punta: lo que hay que mirar es si el nodo INSERT se pelea con `metrics`
-   (`jsonb`) o `topics` (`text[]`).
-5. Decirle a Claude: *"seguimos con la Etapa 3"*.
+4. Decirle a Claude: *"seguimos con la Etapa 4"* (el informe).
 
-**Si el workflow de n8n se perdió** (un `make reset` borra el volumen `n8n_data`), se recupera
-con el JSON versionado:
+**Si los workflows de n8n se perdieron** (un `make reset` borra el volumen `n8n_data`):
 
 ```
-docker compose cp n8n/workflows/captura-y-analisis-de-menciones.json n8n:/tmp/import.json
-docker compose exec n8n n8n import:workflow --input=/tmp/import.json
+for f in captura-y-analisis-de-menciones errores-del-pipeline; do
+  docker compose cp n8n/workflows/$f.json n8n:/tmp/$f.json
+  docker compose exec n8n n8n import:workflow --input=/tmp/$f.json
+done
+docker compose restart n8n
 ```
 
-Como el JSON conserva el `id` del workflow, importar **actualiza** el existente en vez de
-duplicarlo. Lo que el import **no** trae son las credenciales: hay que volver a cargar la de
-Postgres a mano (Host `postgres`, base `social_listening`, usuario y password del `.env`).
-Después de importar, refrescar la pestaña del navegador — si la UI tenía el workflow abierto con
-cambios sin guardar, al guardar pisa lo importado.
+Como los JSON conservan el `id` del workflow, importar **actualiza** el existente en vez de
+duplicarlo, y el `settings.errorWorkflow` del principal sigue apuntando al de errores. Lo que el
+import **no** trae son las credenciales: hay que volver a cargar la de Postgres a mano (Host
+`postgres`, base `social_listening`, usuario y password del `.env`). Después de importar,
+refrescar la pestaña del navegador — si la UI tenía el workflow abierto con cambios sin guardar,
+al guardar pisa lo importado.
 
 **Qué es la `GROQ_API_KEY`** (quedó explicado en la sesión, se resume acá para no perderlo):
 Groq es un proveedor que corre modelos open source en su hardware y los expone por HTTP. La API

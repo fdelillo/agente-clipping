@@ -89,6 +89,13 @@ services:
     environment:
       GENERIC_TIMEZONE: ${GENERIC_TIMEZONE}
       TZ: ${GENERIC_TIMEZONE}
+      # Los nodos de archivos de n8n ("Read/Write Files from Disk") tienen el
+      # filesystem bloqueado por defecto: sin esto fallan con "Access to the
+      # file is not allowed", que no es un permiso de Unix sino una defensa
+      # propia de n8n. Habilitamos SOLO el volumen compartido, que es lo
+      # único que los workflows tienen que tocar. Abrirlo entero sería peor:
+      # un workflow con una ruta mal armada podría escribir donde no debe.
+      N8N_RESTRICT_FILE_ACCESS_TO: /data
       # OJO: en versiones viejas de n8n hacía falta prender esto a mano
       # (N8N_RUNNERS_ENABLED=true) o tirar un warning de deprecación. En la
       # versión "latest" actual (2.37.7) es al revés: los runners ya vienen
